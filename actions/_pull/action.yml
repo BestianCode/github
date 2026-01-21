@@ -1,61 +1,31 @@
 name: "_pull"
 description: "Checkout a GitHub repository into a folder"
 
-inputs:
-  SHARED_REPO_NAME:
-    description: "Repository to checkout (OWNER/REPO). If omitted, falls back to env.SHARED_REPO_NAME"
-    required: false
-  SHARED_REPO_BRANCH:
-    description: "Git ref (branch/tag/SHA). If omitted, falls back to env.SHARED_REPO_BRANCH. If still empty, default branch is used."
-    required: false
-  GITHUB_TOKEN:
-    description: "Token to use for checkout. Defaults to github.token"
-    required: false
-    default: ${{ github.token }}
-  SHARED_FOLDER:
-    description: "Target folder to checkout into"
-    required: false
-    default: "./shared"
-
 runs:
   using: "composite"
   steps:
-    - name: Resolve repository/ref
-      id: resolve
+    - name: Validate required env
       shell: bash
       run: |
         set -euo pipefail
-
-        repo="${{ inputs.SHARED_REPO_NAME }}"
-        if [ -z "$repo" ]; then
-          repo="${SHARED_REPO_NAME:-}"
-        fi
-        if [ -z "$repo" ]; then
-          echo "ERROR: Provide input SHARED_REPO_NAME or set env SHARED_REPO_NAME" >&2
+        if [[ -z "${SHARED_REPO_NAME:-}" ]]; then
+          echo "SHARED_REPO_NAME env var is required (e.g. 'org/repo')." >&2
           exit 1
         fi
 
-        ref="${{ inputs.SHARED_REPO_BRANCH }}"
-        if [ -z "$ref" ]; then
-          ref="${SHARED_REPO_BRANCH:-}"
-        fi
-
-        echo "repo=$repo" >> "$GITHUB_OUTPUT"
-        echo "ref=$ref" >> "$GITHUB_OUTPUT"
+    - name: Pull repository (default branch)
+      if: ${{ env.SHARED_REPO_BRANCH == '' }}
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ env.SHARED_REPO_NAME }}
+        token: ${{ env.GITHUB_TOKEN || github.token }}
+        path: ${{ env.SHARED_FOLDER || './shared' }}
 
     - name: Pull repository (explicit ref)
-      if: ${{ steps.resolve.outputs.ref != '' }}
+      if: ${{ env.SHARED_REPO_BRANCH != '' }}
       uses: actions/checkout@v4
       with:
-        repository: ${{ steps.resolve.outputs.repo }}
-        ref: ${{ steps.resolve.outputs.ref }}
-        token: ${{ inputs.GITHUB_TOKEN }}
-        path: ${{ inputs.SHARED_FOLDER }}
-
-    - name: Pull repository (default branch)
-      if: ${{ steps.resolve.outputs.ref == '' }}
-      uses: actions/checkout@v4
-      with:
-        repository: ${{ steps.resolve.outputs.repo }}
-        token: ${{ inputs.GITHUB_TOKEN }}
-        path: ${{ inputs.SHARED_FOLDER }}
+        repository: ${{ env.SHARED_REPO_NAME }}
+        ref: ${{ env.SHARED_REPO_BRANCH }}
+        token: ${{ env.GITHUB_TOKEN || github.token }}
+        path: ${{ env.SHARED_FOLDER || './shared' }}
