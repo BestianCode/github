@@ -1,4 +1,4 @@
-name: "_pull"
+name: "_shared"
 description: "Checkout a GitHub repository into a folder"
 
 runs:

@@ -1,4 +1,4 @@
-# _pull
+# _shared
 
 Checkout a GitHub repository into a subfolder (useful for pulling shared libraries/modules into the workspace).
 
@@ -22,5 +22,5 @@ env:
 
 steps:
   - uses: actions/checkout@v4
-  - uses: BestianCode/github/actions/_pull@v1
+  - uses: BestianCode/github/actions/_shared@v1
 ```
