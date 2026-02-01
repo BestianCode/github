@@ -1,0 +1,48 @@
+name: "general/gitCommitHash"
+description: "Export short git commit hash to GITHUB_ENV"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Validate environment
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        if ! command -v git >/dev/null 2>&1; then
+          echo "git is required but not found in PATH" >&2
+          exit 1
+        fi
+
+        if [[ -z "${GITHUB_ENV:-}" ]]; then
+          echo "GITHUB_ENV is not set (are you running inside GitHub Actions?)" >&2
+          exit 1
+        fi
+
+    - name: Export commit hash
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        hash_len="${COMMIT_HASH_LENGTH:-7}"
+        if ! [[ "${hash_len}" =~ ^[0-9]+$ ]] || [[ "${hash_len}" -lt 1 ]]; then
+          echo "COMMIT_HASH_LENGTH must be a positive integer" >&2
+          exit 1
+        fi
+
+        commit_sha="${GITHUB_SHA:-}"
+        if [[ -z "${commit_sha}" ]]; then
+          commit_sha="${{ github.sha }}"
+        fi
+
+        git_commit_var="${GIT_COMMIT_ENV:-GIT_COMMIT}"
+        k8s_commit_var="${K8S_COMMIT_HASH_ENV:-K8S_COMMIT_HASH}"
+        set_k8s="${SET_K8S_COMMIT_HASH:-true}"
+
+        short_hash=$(git rev-parse --short="${hash_len}" "${commit_sha}")
+
+        echo "${git_commit_var}=${short_hash}" >> "${GITHUB_ENV}"
+
+        if [[ "${set_k8s}" == "true" ]]; then
+          echo "${k8s_commit_var}=${short_hash}" >> "${GITHUB_ENV}"
+        fi

@@ -1,0 +1,75 @@
+name: "aws/s3Sync"
+description: "Sync a folder to S3 and optionally invalidate CloudFront"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Validate required env
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        if [[ -z "${AWS_ACCESS_KEY_ID:-}" ]]; then
+          echo "AWS_ACCESS_KEY_ID env var is required." >&2
+          exit 1
+        fi
+        if [[ -z "${AWS_SECRET_ACCESS_KEY:-}" ]]; then
+          echo "AWS_SECRET_ACCESS_KEY env var is required." >&2
+          exit 1
+        fi
+        if [[ -z "${AWS_DEFAULT_REGION:-}" ]]; then
+          echo "AWS_DEFAULT_REGION env var is required." >&2
+          exit 1
+        fi
+        if [[ -z "${BUCKET_NAME:-}" ]]; then
+          echo "BUCKET_NAME env var is required (used as S3 bucket name and CloudFront alias)." >&2
+          exit 1
+        fi
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ env.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ env.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_DEFAULT_REGION }}
+
+    - name: Sync to S3
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        SRC_FOLDER="${SOURCE_FOLDER:-dist/}"
+        DST_FOLDER="${DESTINATION_FOLDER:-}"
+        DST_FOLDER="${DST_FOLDER#/}"
+        DST_FOLDER="${DST_FOLDER%/}"
+
+        if [[ -n "${DST_FOLDER}" ]]; then
+          destination_uri="s3://${BUCKET_NAME}/${DST_FOLDER}/"
+        else
+          destination_uri="s3://${BUCKET_NAME}/"
+        fi
+
+        echo "Syncing files from '${SRC_FOLDER}' to '${destination_uri}'"
+        aws s3 sync "${SRC_FOLDER}" "${destination_uri}" --delete
+
+    - name: Invalidate CloudFront cache
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        if [[ "${INVALIDATE_CLOUDFRONT:-true}" != "true" ]]; then
+          echo "Skipping CloudFront invalidation: INVALIDATE_CLOUDFRONT=${INVALIDATE_CLOUDFRONT}"
+          exit 0
+        fi
+
+        distID=$(aws cloudfront list-distributions \
+          --query "DistributionList.Items[?Aliases.Items!=null] | [?contains(Aliases.Items, '${BUCKET_NAME}')].Id" \
+          --output text | awk '{print $1}')
+
+        if [[ -z "${distID}" || "${distID}" == "None" ]]; then
+          echo "Skipping CloudFront invalidation: no distribution found for alias '${BUCKET_NAME}'"
+          exit 0
+        fi
+
+        INVALIDATE_PATHS_VALUE="${INVALIDATE_PATHS:-/*}"
+        aws cloudfront create-invalidation --distribution-id "${distID}" --paths ${INVALIDATE_PATHS_VALUE}
