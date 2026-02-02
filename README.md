@@ -12,3 +12,6 @@ This repository contains reusable GitHub Actions.
 
 - [actions/general/gitCommitHash](actions/general/gitCommitHash)
 	- Export short git commit hash to GITHUB_ENV.
+
+- [actions/admin/ansible](actions/admin/ansible)
+	- Run an Ansible playbook from ./shared/ansible (optionally via jump host).

@@ -1,0 +1,171 @@
+name: "admin/ansible"
+description: "Run an Ansible playbook from ./shared/ansible (optionally via SSH jump host)"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Validate environment
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        if [[ -z "${SSH_KEY:-}" ]]; then
+          echo "SSH_KEY env var is required (private key used by Ansible/SSH)." >&2
+          exit 1
+        fi
+
+        if [[ ! -d "shared/ansible" ]]; then
+          echo "Expected 'shared/ansible' folder. Use actions/_shared to checkout your shared library into ./shared." >&2
+          exit 1
+        fi
+
+    - name: Determine inventory source
+      id: inventory
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        inventory_file="${ANSIBLE_INVENTORY_FILE:-shared/ansible/inventory/hosts}"
+        if [[ -f "${inventory_file}" ]]; then
+          echo "need_download=false" >> "${GITHUB_OUTPUT}"
+          exit 0
+        fi
+
+        echo "need_download=true" >> "${GITHUB_OUTPUT}"
+
+    - name: Download inventory artifact
+      if: ${{ steps.inventory.outputs.need_download == 'true' }}
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ env.ANSIBLE_INVENTORY_ARTIFACT_NAME || 'ansible-inventory-file' }}
+        path: ${{ env.ANSIBLE_INVENTORY_ARTIFACT_PATH || 'shared/ansible/inventory' }}
+
+    - name: Show inventory
+      shell: bash
+      run: |
+        set -euo pipefail
+        inventory_file="${ANSIBLE_INVENTORY_FILE:-shared/ansible/inventory/hosts}"
+        if [[ ! -f "${inventory_file}" ]]; then
+          echo "Inventory file not found at '${inventory_file}'" >&2
+          exit 1
+        fi
+        cat "${inventory_file}"
+
+    - name: Configure SSH jump host
+      if: ${{ env.ANSIBLE_JUMP_HOST != '' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        mkdir -p ~/.ssh
+        chmod 700 ~/.ssh
+
+        # Write SSH private key for jump host
+        printf '%s\n' "${SSH_KEY}" | tr -d '\r' > ~/.ssh/id_rsa
+        chmod 600 ~/.ssh/id_rsa
+
+        # Clean up any existing ssh-agent socket and start fresh
+        export SSH_AUTH_SOCK=${PWD}/agent.sock
+        rm -f ${SSH_AUTH_SOCK} 2>/dev/null || true
+        eval $(ssh-agent -a ${SSH_AUTH_SOCK})
+        ssh-add ~/.ssh/id_rsa
+
+        # Determine working SSH port for jump host (try preferred port first, fallback to 22)
+        JUMP_HOST="${{ env.ANSIBLE_JUMP_HOST }}"
+        PREFERRED_PORT="${{ env.ANSIBLE_JUMP_PORT || '22' }}"
+        FALLBACK_PORT="22"
+        JUMP_PORT=""
+
+        echo "Testing SSH port connectivity to ${JUMP_HOST}..."
+
+        if command -v nc >/dev/null 2>&1; then
+          # Test preferred port first (2 second timeout)
+          if nc -z -w 2 "${JUMP_HOST}" "${PREFERRED_PORT}" 2>/dev/null; then
+            JUMP_PORT="${PREFERRED_PORT}"
+            echo "Port ${PREFERRED_PORT} is reachable"
+          elif [ "${PREFERRED_PORT}" != "${FALLBACK_PORT}" ]; then
+            echo "Port ${PREFERRED_PORT} not reachable, trying fallback port ${FALLBACK_PORT}..."
+            if nc -z -w 2 "${JUMP_HOST}" "${FALLBACK_PORT}" 2>/dev/null; then
+              JUMP_PORT="${FALLBACK_PORT}"
+              echo "Fallback port ${FALLBACK_PORT} is reachable"
+            fi
+          fi
+        else
+          echo "nc not available; skipping port reachability test"
+        fi
+
+        # If neither port worked, default to preferred (let SSH handle the error)
+        if [ -z "${JUMP_PORT}" ]; then
+          echo "⚠ Could not verify port connectivity, using ${PREFERRED_PORT}"
+          JUMP_PORT="${PREFERRED_PORT}"
+        fi
+
+        echo "Using jump host port: ${JUMP_PORT}"
+
+        # Configure SSH to use jump host
+        cat >> ~/.ssh/config << EOF
+        Host *
+          CheckHostIP no
+          StrictHostKeyChecking=no
+          Compression yes
+          ForwardAgent yes
+          UserKnownHostsFile /dev/null
+
+        Host bastion
+          HostName ${JUMP_HOST}
+          Port ${JUMP_PORT}
+          User ${{ env.ANSIBLE_JUMP_USER || env.SSH_USER || 'terraform' }}
+          IdentityFile ~/.ssh/id_rsa
+
+        Host 10.* 192.168.* *.internal *.n.internal *.*.n.internal
+          IdentityFile ~/.ssh/id_rsa
+          Port ${{ env.SSH_PORT || '22' }}
+          User ${{ env.SSH_USER || 'terraform' }}
+          ProxyCommand ssh -l ${{ env.ANSIBLE_JUMP_USER || env.SSH_USER || 'terraform' }} -W %h:%p bastion
+        EOF
+
+        chmod 600 ~/.ssh/config
+        echo "SSH jump host configured: ${JUMP_HOST}:${JUMP_PORT}"
+
+        #echo "SSH config:"
+        #cat ~/.ssh/config
+
+        echo "SSH added keys:"
+        ssh-add -l
+
+    - name: Check if inventory contains ansible_host
+      shell: bash
+      id: check
+      run: |
+        set -euo pipefail
+        inventory_file="${ANSIBLE_INVENTORY_FILE:-shared/ansible/inventory/hosts}"
+        if grep -q 'ansible_host' "${inventory_file}"; then
+          echo "contains_ansible_host=true" >> "${GITHUB_OUTPUT}"
+        else
+          echo "contains_ansible_host=false" >> "${GITHUB_OUTPUT}"
+        fi
+
+    - name: Install requirements
+      if: steps.check.outputs.contains_ansible_host == 'true'
+      uses: dawidd6/action-ansible-playbook@v2
+      with:
+        playbook: ${{ env.ANSIBLE_COLLECTIONS_PLAYBOOK || '_update-ansible-collections.yml' }}
+        directory: shared/ansible/
+        options: |
+          -i inventory/
+          --diff
+
+    - name: Run ansible...
+      if: steps.check.outputs.contains_ansible_host == 'true'
+      uses: dawidd6/action-ansible-playbook@v2
+      with:
+        playbook: ${{ env.ANSIBLE_PLAYBOOK_NAME || 'playbook.yml' }}
+        directory: shared/ansible/
+        key: ${{ env.SSH_KEY }}
+        options: |
+          -i inventory/
+          --diff
+          --user ${{ env.SSH_USER || 'terraform' }}
+          --limit ${{ env.ANSIBLE_LIMIT || env.ENV || 'all' }} ${{ env.ANSIBLE_EXTRA_ARGS || '' }}
+      env:
+        ANSIBLE_HOST_KEY_CHECKING: False
