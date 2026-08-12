@@ -33,12 +33,12 @@ runs:
 
         echo "need_download=true" >> "${GITHUB_OUTPUT}"
 
-    - name: Download inventory artifact
-      if: ${{ steps.inventory.outputs.need_download == 'true' }}
-      uses: actions/download-artifact@v4
-      with:
-        name: ${{ env.ANSIBLE_INVENTORY_ARTIFACT_NAME || 'ansible-inventory-file' }}
-        path: ${{ env.ANSIBLE_INVENTORY_ARTIFACT_PATH || 'shared/ansible/inventory' }}
+    #- name: Download inventory artifact
+    #  if: ${{ steps.inventory.outputs.need_download == 'true' }}
+    #  uses: actions/download-artifact@v4
+    #  with:
+    #    name: ${{ env.ANSIBLE_INVENTORY_ARTIFACT_NAME || 'ansible-inventory-file' }}
+    #    path: ${{ env.ANSIBLE_INVENTORY_ARTIFACT_PATH || 'shared/ansible/inventory' }}
 
     - name: Show inventory
       shell: bash
